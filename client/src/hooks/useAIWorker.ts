@@ -29,12 +29,23 @@ export function useAIWorker() {
     const unsubscribe = workerClient.onMessage((msg) => {
       switch (msg.type) {
         case "initProgress":
+          // Always update progress percentage
           setModelProgress(msg.progress);
-          if (modelState === "idle") setModelState("downloading");
+          // Always update state during initialization to show overlay
+          // Phase determines if we're downloading from internet or loading from cache
+          const phase = msg.phase || 'loading';
+          const newState = phase === 'downloading' ? "downloading" : "loading";
+          // Update state if it's different to ensure overlay visibility
+          if (modelState !== newState && (modelState === "idle" || modelState === "loading" || modelState === "downloading")) {
+            setModelState(newState);
+          }
           break;
         case "initComplete":
           setModelState("ready");
           setModelProgress(100);
+          // Clear downloading model info
+          const setDownloadingModel = useAppStore.getState().setDownloadingModel;
+          setDownloadingModel(null, null);
           // Mark the model as cached so subsequent offline loads are instant
           try {
             if (lastInitModelIdRef.current) {
@@ -67,6 +78,9 @@ export function useAIWorker() {
   const initModel = useCallback((modelId: string) => {
     setModelState("loading");
     lastInitModelIdRef.current = modelId;
+    // Set downloading model info for global overlay
+    const setDownloadingModel = useAppStore.getState().setDownloadingModel;
+    setDownloadingModel(modelId, modelId);
     workerClient.sendMessage({ type: "init", modelId });
   }, [setModelState]);
 

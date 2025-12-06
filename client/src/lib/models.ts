@@ -13,12 +13,61 @@ export interface ModelMeta {
 const LOCAL_KEY = "hrai-models-cache-v1";
 const CUSTOM_MODELS_KEY = "hrai-custom-models";
 
-// Helper to get custom models from localStorage
+// Sanitize string to prevent XSS attacks
+function sanitizeString(str: string): string {
+  if (typeof str !== 'string') return '';
+  // Remove HTML tags and script content
+  return str
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/javascript:/gi, '')
+    .replace(/on\w+\s*=/gi, '')
+    .trim();
+}
+
+// Validate and sanitize model metadata to prevent XSS
+function sanitizeModel(model: any): ModelMeta | null {
+  try {
+    // Validate required fields
+    if (!model.id || !model.name || !model.displayName) return null;
+    
+    // Validate model ID format (alphanumeric, hyphens, underscores only)
+    if (!/^[a-zA-Z0-9_-]+$/.test(model.id)) {
+      console.warn(`Invalid model ID format: ${model.id}`);
+      return null;
+    }
+    
+    return {
+      id: sanitizeString(model.id),
+      name: sanitizeString(model.name),
+      displayName: sanitizeString(model.displayName),
+      sizeMB: Math.max(0, Number(model.sizeMB) || 0),
+      quantization: sanitizeString(model.quantization || 'unknown'),
+      vramMinGB: Math.max(0, Number(model.vramMinGB) || 0),
+      speed: sanitizeString(model.speed || 'Unknown'),
+      description: sanitizeString(model.description || ''),
+      recommended: sanitizeString(model.recommended || ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Helper to get custom models from localStorage with XSS protection
 function getCustomModels(): ModelMeta[] {
   try {
     const stored = localStorage.getItem(CUSTOM_MODELS_KEY);
-    return stored ? JSON.parse(stored) : [];
+    if (!stored) return [];
+    
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    
+    // Sanitize each model and filter out invalid ones
+    return parsed
+      .map(sanitizeModel)
+      .filter((model): model is ModelMeta => model !== null);
   } catch {
+    // Silently fail in production, return empty array
     return [];
   }
 }
@@ -30,7 +79,7 @@ export async function fetchModelsJSON(): Promise<ModelMeta[]> {
     const data = await res.json();
     if (Array.isArray(data)) {
       localStorage.setItem(LOCAL_KEY, JSON.stringify({ ts: Date.now(), data }));
-      // Merge with custom models
+      // Merge with custom models (sanitized for XSS protection)
       const customModels = getCustomModels();
       return [...data as ModelMeta[], ...customModels];
     }
@@ -81,6 +130,28 @@ export async function fetchModelsJSON(): Promise<ModelMeta[]> {
         speed: "Balanced",
         description: "Microsoft's Phi model. Great for coding and technical tasks.",
         recommended: "Coding • Technical queries • Advanced reasoning"
+      },
+      {
+        id: "Phi-3.5-vision-instruct-q4f32_1-MLC",
+        name: "Phi 3.5 Vision",
+        displayName: "Phi 3.5 Vision (Multimodal)",
+        sizeMB: 4200,
+        quantization: "q4f16_1",
+        vramMinGB: 5,
+        speed: "Multimodal",
+        description: "Vision-language model. Analyzes images, PDFs, and documents. Answers questions about visual content.",
+        recommended: "Image analysis • Document understanding • Visual Q&A • OCR"
+      },
+      {
+        id: "Llama-3-8B-Instruct-q4f16_1-MLC",
+        name: "Llama 3 8B",
+        displayName: "Llama 3 8B Instruct",
+        sizeMB: 4900,
+        quantization: "q4f16_1",
+        vramMinGB: 6,
+        speed: "Pro Quality",
+        description: "The most powerful model. Excellent for complex reasoning, coding, and creative tasks.",
+        recommended: "High-end devices • Best quality • Complex tasks"
       },
       ...customModels
     ];

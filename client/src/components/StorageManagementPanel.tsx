@@ -40,8 +40,19 @@ import {
   type CacheInfo,
 } from "@/lib/storage-utils";
 import { db } from "@/lib/db";
+import { getModelStorageInfo, getTotalModelStorageMB, getAvailableModels, getOrphanedModels, cleanupOrphanedModels } from "@/lib/model-utils";
 
-export function StorageManagementPanel() {
+interface StorageManagementPanelProps {
+  downloadedModels?: string[];
+  currentModelId?: string;
+  onDeleteModel?: (modelId: string, modelName: string) => void;
+}
+
+export function StorageManagementPanel({ 
+  downloadedModels = [], 
+  currentModelId,
+  onDeleteModel 
+}: StorageManagementPanelProps = {}) {
   const [storageEstimate, setStorageEstimate] = useState<StorageEstimate | null>(null);
   const [cacheInfo, setCacheInfo] = useState<CacheInfo[]>([]);
   const [isPersisted, setIsPersisted] = useState(false);
@@ -51,11 +62,16 @@ export function StorageManagementPanel() {
   const [chatCount, setChatCount] = useState(0);
   const [messageCount, setMessageCount] = useState(0);
   const [metricsCount, setMetricsCount] = useState(0);
+  const [modelStorageInfo, setModelStorageInfo] = useState<{ modelId: string; name: string; sizeMB: number }[]>([]);
+  const [totalModelStorageMB, setTotalModelStorageMB] = useState(0);
+  const [orphanedModels, setOrphanedModels] = useState<string[]>([]);
+  const [cleaningOrphans, setCleaningOrphans] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
     loadStorageInfo();
     loadDatabaseStats();
+    loadModelStorageInfo();
   }, []);
 
   const loadStorageInfo = async () => {
@@ -95,6 +111,55 @@ export function StorageManagementPanel() {
       setMetricsCount(metrics);
     } catch (error) {
       console.error("Failed to load database stats:", error);
+    }
+  };
+
+  const loadModelStorageInfo = async () => {
+    try {
+      const [models, totalMB, orphaned] = await Promise.all([
+        getModelStorageInfo(),
+        getTotalModelStorageMB(),
+        getOrphanedModels(),
+      ]);
+
+      setModelStorageInfo(models);
+      setTotalModelStorageMB(totalMB);
+      setOrphanedModels(orphaned);
+    } catch (error) {
+      console.error("Failed to load model storage info:", error);
+    }
+  };
+
+  const handleCleanupOrphans = async () => {
+    try {
+      setCleaningOrphans(true);
+      const result = await cleanupOrphanedModels();
+
+      if (result.success) {
+        toast({
+          title: "Cleanup Complete",
+          description: `Removed ${result.deletedModels.length} orphaned model(s), freed ${(result.freedMB / 1024).toFixed(2)} GB`,
+        });
+        
+        // Reload storage info
+        await loadStorageInfo();
+        await loadModelStorageInfo();
+      } else {
+        toast({
+          title: "Cleanup Errors",
+          description: `Some models couldn't be deleted: ${result.errors.join(', ')}`,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to cleanup orphaned models:", error);
+      toast({
+        title: "Error",
+        description: "Failed to cleanup orphaned models",
+        variant: "destructive",
+      });
+    } finally {
+      setCleaningOrphans(false);
     }
   };
 
@@ -197,7 +262,10 @@ export function StorageManagementPanel() {
         <Button
           variant="outline"
           size="sm"
-          onClick={loadStorageInfo}
+          onClick={() => {
+            loadStorageInfo();
+            loadModelStorageInfo();
+          }}
           disabled={loading}
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
@@ -312,32 +380,188 @@ export function StorageManagementPanel() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Database className="h-5 w-5 text-green-600" />
-            IndexedDB
+            IndexedDB Storage
           </CardTitle>
           <CardDescription>
-            Models, chat history, and performance data
+            AI models, chat history, and performance data
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* AI Models Section */}
           <div className="space-y-3">
             <div className="flex items-center justify-between p-3 rounded-lg bg-gradient-to-br from-blue-500/10 to-blue-600/10 border border-blue-500/20">
               <div className="flex items-center gap-3">
                 <Activity className="h-5 w-5 text-blue-600" />
                 <div>
-                  <p className="font-medium">AI Models</p>
-                  <p className="text-xs text-muted-foreground">hr_offline_models</p>
+                  <p className="font-medium">AI Models Storage</p>
+                  <p className="text-xs text-muted-foreground">
+                    {modelStorageInfo.length} model{modelStorageInfo.length !== 1 ? 's' : ''} downloaded
+                  </p>
                 </div>
               </div>
-              <Badge variant="secondary">Active</Badge>
+              <div className="text-right">
+                <Badge variant="secondary" className="text-lg px-3 py-1">
+                  {formatBytes(totalModelStorageMB * 1024 * 1024)}
+                </Badge>
+              </div>
             </div>
 
+            {/* Individual Model Breakdown */}
+            {modelStorageInfo.length > 0 && (
+              <div className="ml-8 space-y-2 border-l-2 border-blue-500/20 pl-4">
+                {modelStorageInfo.map((model) => (
+                  <div
+                    key={model.modelId}
+                    className="flex items-center justify-between p-2 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
+                  >
+                    <div>
+                      <p className="text-sm font-medium">{model.name}</p>
+                      <p className="text-xs text-muted-foreground">{model.modelId}</p>
+                    </div>
+                    <span className="text-sm font-medium text-blue-600">
+                      {formatBytes(model.sizeMB * 1024 * 1024)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {modelStorageInfo.length === 0 && (
+              <div className="ml-8 p-3 rounded-lg bg-muted/30 border-l-2 border-blue-500/20">
+                <p className="text-sm text-muted-foreground">
+                  No AI models downloaded yet. Download a model from Settings → AI section.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Orphaned Models Warning */}
+          {orphanedModels.length > 0 && (
+            <>
+              <Separator />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 rounded-lg bg-orange-500/10 border border-orange-500/30">
+                  <div className="flex items-center gap-3">
+                    <AlertCircle className="h-5 w-5 text-orange-600" />
+                    <div>
+                      <p className="font-medium text-orange-700 dark:text-orange-300">Orphaned Models Found</p>
+                      <p className="text-xs text-orange-600/70 dark:text-orange-400/70">
+                        {orphanedModels.length} old/unused model{orphanedModels.length !== 1 ? 's' : ''} taking up space
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCleanupOrphans}
+                    disabled={cleaningOrphans}
+                    className="border-orange-500/50 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30"
+                  >
+                    {cleaningOrphans ? (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        Cleaning...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Clean Up
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <div className="ml-8 space-y-2 border-l-2 border-orange-500/20 pl-4">
+                  {orphanedModels.map((modelId) => (
+                    <div
+                      key={modelId}
+                      className="flex items-center justify-between p-2 rounded-lg bg-orange-50/50 dark:bg-orange-950/20 border border-orange-200/30 dark:border-orange-800/30"
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-orange-900 dark:text-orange-100">{modelId}</p>
+                        <p className="text-xs text-orange-600/70 dark:text-orange-400/70">Legacy/removed model</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground ml-8">
+                  💡 These models are no longer used by the app. Click "Clean Up" to free storage space.
+                </p>
+              </div>
+            </>
+          )}
+
+          {/* Manage Downloaded Models */}
+          {downloadedModels.length > 0 && onDeleteModel && (
+            <>
+              <Separator />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-blue-700 dark:text-blue-300">Manage Downloaded Models</h4>
+                  <Badge variant="outline" className="text-xs">
+                    {downloadedModels.length} model{downloadedModels.length !== 1 ? 's' : ''}
+                  </Badge>
+                </div>
+                <div className="space-y-2">
+                  {getAvailableModels().map(model => {
+                    const isDownloaded = downloadedModels.includes(model.id);
+                    if (!isDownloaded) return null;
+                    
+                    const isActive = currentModelId === model.id;
+                    
+                    return (
+                      <div 
+                        key={model.id} 
+                        className={`flex items-center justify-between p-3 rounded-lg border transition-all ${
+                          isActive 
+                            ? 'bg-blue-500/10 border-blue-500/30 dark:bg-blue-500/20 dark:border-blue-500/40' 
+                            : 'bg-muted/30 border-muted hover:bg-muted/50'
+                        }`}
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium">{model.displayName}</p>
+                            {isActive && (
+                              <Badge variant="default" className="text-xs h-5">
+                                Active
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">{model.name}</p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => onDeleteModel(model.id, model.displayName)}
+                          className="h-8 px-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                          disabled={isActive}
+                          title={isActive ? "Cannot delete active model" : "Delete model"}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+                {currentModelId && downloadedModels.includes(currentModelId) && (
+                  <p className="text-xs text-muted-foreground">
+                    💡 Cannot delete the currently active model. Switch to another model first.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+          <Separator />
+
+          {/* Chat History */}
+          <div className="space-y-3">
             <div className="flex items-center justify-between p-3 rounded-lg bg-gradient-to-br from-purple-500/10 to-purple-600/10 border border-purple-500/20">
               <div className="flex items-center gap-3">
                 <MessageSquare className="h-5 w-5 text-purple-600" />
                 <div>
                   <p className="font-medium">Chat History</p>
                   <p className="text-xs text-muted-foreground">
-                    {chatCount} sessions • {messageCount} messages
+                    {chatCount} session{chatCount !== 1 ? 's' : ''} • {messageCount} message{messageCount !== 1 ? 's' : ''}
                   </p>
                 </div>
               </div>
@@ -350,7 +574,7 @@ export function StorageManagementPanel() {
                 <div>
                   <p className="font-medium">Performance Metrics</p>
                   <p className="text-xs text-muted-foreground">
-                    {metricsCount} data points
+                    {metricsCount} data point{metricsCount !== 1 ? 's' : ''}
                   </p>
                 </div>
               </div>

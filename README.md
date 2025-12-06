@@ -191,8 +191,11 @@ npm start
 
 ### First Time Setup
 1. Open the application in your browser
-2. Select an AI model from settings (Llama 3.2 1B/3B, Phi 3.5 Mini)
-3. Wait for the model to download (1-3GB, one-time download)
+2. Select an AI model from settings
+  Fast (1 Model): Llama 1B
+  Balanced (4 Models): Gemma 2B{Coming Soon}, Llama 3B, Phi 3.5, Phi 3.5 Vision
+  Pro Quality (2 Models): Llama 8B, Gemma 9B{Coming Soon}
+3. Wait for the model to download
 4. Start chatting!
 
 ### Installing as PWA
@@ -300,9 +303,9 @@ HR AI MIND/
 
 ## 🔑 Available Models
 
-1. **Llama 3.2 1B** - Fast, lightweight (1GB)
-2. **Llama 3.2 3B** - Balanced performance (2GB)
-3. **Phi 3.5 Mini** - Microsoft's efficient model (2GB)
+- **Fast (1 Model): Llama 1B**
+- **Balanced (4 Models): Gemma 2B{Coming Soon}, Llama 3B, Phi 3.5, Phi 3.5 Vision**
+- **Pro Quality (2 Models): Llama 8B, Gemma 9B{Coming Soon}** 
 
 ## 📱 Browser Compatibility
 

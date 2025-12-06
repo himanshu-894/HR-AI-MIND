@@ -2,6 +2,7 @@ import * as webllm from "@mlc-ai/web-llm";
 
 let engine: webllm.MLCEngine | null = null;
 let currentModelId: string | null = null;
+let isModelAlreadyCached = false;
 
 self.onmessage = async (e: MessageEvent) => {
   const message = e.data;
@@ -41,11 +42,29 @@ async function handleInit(modelId: string) {
       engine = null;
     }
 
+    // Check if model is already cached in IndexedDB
+    const dbName = `webllm/model/${modelId}`;
+    const databases = await indexedDB.databases();
+    isModelAlreadyCached = databases.some(db => db.name === dbName);
+    console.log(`Model ${modelId} cache status: ${isModelAlreadyCached ? 'cached' : 'not cached'}`);
+
     const initProgressCallback = (progress: webllm.InitProgressReport) => {
       const percentage = progress.progress * 100;
+      // Determine phase: if model is already cached, it's loading from cache; otherwise downloading
+      // Use cache status as primary indicator (checked before init starts)
+      // Progress text is secondary - if cached and text doesn't mention download/fetch, it's definitely loading
+      const textIndicatesDownload = progress.text?.toLowerCase().includes('download') || 
+                                    progress.text?.toLowerCase().includes('fetch');
+      
+      // Logic: If model is cached and text doesn't say download, it's loading
+      // If model is NOT cached, it's downloading (regardless of text)
+      const isDownloading = !isModelAlreadyCached;
+      
       self.postMessage({
         type: "initProgress",
         progress: percentage,
+        phase: isDownloading ? 'downloading' : 'loading',
+        text: progress.text || ''
       });
     };
 

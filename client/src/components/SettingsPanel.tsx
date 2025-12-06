@@ -9,13 +9,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { X, Shield } from "lucide-react";
+import { X, Shield, Trash2 } from "lucide-react";
 import type { Settings } from "@shared/schema";
 import { DEFAULT_SETTINGS } from "@shared/schema";
 import { ModelPerformancePanel } from "./ModelPerformancePanel";
 import { StorageManagementPanel } from "./StorageManagementPanel";
 import { AdminPanel } from "./AdminPanel";
-import { isModelCached, getAvailableModels } from "@/lib/model-utils";
+import { isModelCached, getAvailableModels, deleteModelFromCache } from "@/lib/model-utils";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
 
 // Only load CacheDebugger in development mode
 const CacheDebugger = lazy(() => import("./CacheDebugger").then(m => ({ default: m.CacheDebugger })));
@@ -28,12 +30,16 @@ interface SettingsPanelProps {
 }
 
 export function SettingsPanel({ open, onClose, settings, onSave }: SettingsPanelProps) {
+  const { toast } = useToast();
   const [localSettings, setLocalSettings] = useState<Settings>(settings);
   const [downloadedModels, setDownloadedModels] = useState<string[]>([]);
   const [showDownloadAlert, setShowDownloadAlert] = useState(false);
   const [selectedUnavailableModel, setSelectedUnavailableModel] = useState<string>("");
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [adminKeyCount, setAdminKeyCount] = useState(0);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [modelToDelete, setModelToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Check which models are downloaded
   useEffect(() => {
@@ -94,6 +100,47 @@ export function SettingsPanel({ open, onClose, settings, onSave }: SettingsPanel
       // Model is downloaded, allow selection
       setLocalSettings(prev => ({ ...prev, modelId: value }));
     }
+  };
+
+  const handleDeleteModel = (modelId: string, modelName: string) => {
+    setModelToDelete({ id: modelId, name: modelName });
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDeleteModel = async () => {
+    if (!modelToDelete) return;
+    
+    setIsDeleting(true);
+    const result = await deleteModelFromCache(modelToDelete.id);
+    
+    if (result.success) {
+      // Update the downloaded models list
+      setDownloadedModels(prev => prev.filter(id => id !== modelToDelete.id));
+      
+      // If deleted model was the currently selected one, switch to first available
+      if (localSettings.modelId === modelToDelete.id) {
+        const availableModels = getAvailableModels();
+        const firstAvailable = availableModels[0];
+        if (firstAvailable) {
+          setLocalSettings(prev => ({ ...prev, modelId: firstAvailable.id }));
+        }
+      }
+      
+      toast({
+        title: "Model Deleted",
+        description: `${modelToDelete.name} has been removed from your device.`,
+      });
+    } else {
+      toast({
+        title: "Delete Failed",
+        description: result.error || "Failed to delete model. Please try again.",
+        variant: "destructive",
+      });
+    }
+    
+    setIsDeleting(false);
+    setShowDeleteDialog(false);
+    setModelToDelete(null);
   };
 
   const handleSave = () => {
@@ -166,10 +213,16 @@ export function SettingsPanel({ open, onClose, settings, onSave }: SettingsPanel
                 <SelectItem value="Phi-3.5-mini-instruct-q4f16_1-MLC">
                   Phi 3.5 Mini (Technical) {downloadedModels.includes("Phi-3.5-mini-instruct-q4f16_1-MLC") ? "✓" : ""}
                 </SelectItem>
+                <SelectItem value="Phi-3.5-vision-instruct-q4f32_1-MLC">
+                  Phi 3.5 Vision (Multimodal) {downloadedModels.includes("Phi-3.5-vision-instruct-q4f32_1-MLC") ? "✓" : ""}
+                </SelectItem>
+                <SelectItem value="Llama-3-8B-Instruct-q4f16_1-MLC">
+                  Llama 3 8B (Pro Quality) {downloadedModels.includes("Llama-3-8B-Instruct-q4f16_1-MLC") ? "✓" : ""}
+                </SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-indigo-600/70 dark:text-indigo-400/70">
-              Switch models during chat. Use the header dropdown to download new models.
+              Switch models during chat. Manage downloaded models in the Storage tab.
             </p>
           </div>
 
@@ -257,22 +310,35 @@ export function SettingsPanel({ open, onClose, settings, onSave }: SettingsPanel
           </div>
 
           {/* Speech to Text Section */}
-          <div className="flex items-center justify-between p-4 rounded-xl bg-white/60 dark:bg-slate-800/40 border border-emerald-100 dark:border-emerald-900/50 hover:border-emerald-200 dark:hover:border-emerald-800/70 hover:shadow-md transition-all duration-300">
-            <div className="space-y-1">
-              <Label htmlFor="stt" className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Speech to Text</Label>
-              <p className="text-xs text-emerald-600/70 dark:text-emerald-400/70">
-                Enable voice input
-              </p>
-            </div>
-            <Switch
-              id="stt"
-              checked={localSettings.enableSTT}
-              onCheckedChange={(checked) => setLocalSettings(prev => ({ ...prev, enableSTT: checked }))}
-              data-testid="switch-stt"
-              className="data-[state=checked]:bg-gradient-to-r data-[state=checked]:from-emerald-500 data-[state=checked]:to-teal-500"
-            />
-          </div>
+          <div className="p-4 rounded-xl bg-white/60 dark:bg-slate-800/40 border border-emerald-100 dark:border-emerald-900/50 hover:border-emerald-200 dark:hover:border-emerald-800/70 hover:shadow-md transition-all duration-300">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+               <Label htmlFor="stt" className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Speech to Text</Label>
+               <p className="text-xs text-emerald-600/70 dark:text-emerald-400/70">
+                 Enable voice input
+               </p>
+             </div>
+             <Switch
+               id="stt"
+               checked={localSettings.enableSTT}
+               onCheckedChange={(checked) => setLocalSettings(prev => ({ ...prev, enableSTT: checked }))}
+               data-testid="switch-stt"
+               className="data-[state=checked]:bg-gradient-to-r data-[state=checked]:from-emerald-500 data-[state=checked]:to-teal-500"
+             />
+           </div>
 
+           {/* ===== ALERT CODE ===== */}
+           {localSettings.enableSTT && (
+             <Alert variant="destructive" className="mt-3 text-left">
+               <AlertTitle>Privacy Note</AlertTitle>
+               <AlertDescription className="text-xs">
+                 Speech-to-Text (Voice Typing) sends audio to your browser provider
+                 (Google/Apple/Microsoft) and requires an internet connection.
+               </AlertDescription>
+             </Alert>
+           )}
+          </div>
+            
           {/* Text to Speech Section */}
           <div className="flex items-center justify-between p-4 rounded-xl bg-white/60 dark:bg-slate-800/40 border border-blue-100 dark:border-blue-900/50 hover:border-blue-200 dark:hover:border-blue-800/70 hover:shadow-md transition-all duration-300">
             <div className="space-y-1">
@@ -574,7 +640,11 @@ export function SettingsPanel({ open, onClose, settings, onSave }: SettingsPanel
                 <CacheDebugger />
               </Suspense>
             )}
-            <StorageManagementPanel />
+            <StorageManagementPanel 
+              downloadedModels={downloadedModels}
+              currentModelId={localSettings.modelId}
+              onDeleteModel={handleDeleteModel}
+            />
           </TabsContent>
         </Tabs>
       </SheetContent>
@@ -598,6 +668,43 @@ export function SettingsPanel({ open, onClose, settings, onSave }: SettingsPanel
           <AlertDialogFooter>
             <AlertDialogAction onClick={() => setShowDownloadAlert(false)}>
               OK
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Model Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-red-600 dark:text-red-400">
+              <Trash2 className="h-5 w-5" />
+              Delete Model?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p>
+                Are you sure you want to delete <strong>{modelToDelete?.name}</strong>?
+              </p>
+              <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800/30 rounded-lg p-3 space-y-2 text-sm">
+                <p className="font-semibold text-red-800 dark:text-red-200">Warning:</p>
+                <ul className="list-disc list-inside space-y-1 text-red-700 dark:text-red-300 text-xs">
+                  <li>This will permanently delete all cached model files</li>
+                  <li>You'll need to re-download if you want to use it again</li>
+                  <li>This action cannot be undone</li>
+                </ul>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteModel}
+              disabled={isDeleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {isDeleting ? "Deleting..." : "Delete Model"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
